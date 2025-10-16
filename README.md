@@ -1,4 +1,4 @@
-# Agentic Flow
+# Autovate - Agentic Flow
 
 An intelligent codebase analysis and commit review system that leverages LLM-powered agents to understand, analyze, and provide insights on code repositories and their changes.
 
