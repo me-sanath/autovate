@@ -43,9 +43,51 @@ Refer to the flow diagram above for a visual representation of the system archit
 
 ### Prerequisites
 
-- Python 3.7+
+- Python 3.11+
 - Git (for git module functionality)
 - Optional: Groq API key (for LLM-powered analysis)
+
+### Run the local MVP (API + Worker + Redis)
+
+```bash
+docker compose up --build
+```
+
+When running, the API is available at `http://localhost:8000`.
+
+Open the dashboard at `http://localhost:8000/` to:
+- Launch jobs (Docs, Tests, Self-Heal, Staging)
+- View recent jobs and their live status
+
+Example calls:
+
+```bash
+# Health
+curl http://localhost:8000/health
+
+# Generate docs
+curl -X POST http://localhost:8000/jobs/doc \
+  -H 'Content-Type: application/json' \
+  -d '{"repo_path":"/workspace"}'
+
+# Generate and run tests
+curl -X POST http://localhost:8000/jobs/tests/generate-run \
+  -H 'Content-Type: application/json' \
+  -d '{"repo_path":"/workspace"}'
+
+# Self heal (format-only)
+curl -X POST http://localhost:8000/jobs/self-heal \
+  -H 'Content-Type: application/json' \
+  -d '{"repo_path":"/workspace","format_only":true}'
+
+# Staging validation (compose)
+curl -X POST http://localhost:8000/jobs/stage/validate \
+  -H 'Content-Type: application/json' \
+  -d '{"repo_path":"/workspace"}'
+
+# Poll job status
+curl http://localhost:8000/jobs/<JOB_ID>
+```
 
 ### Installation
 
@@ -209,6 +251,39 @@ This project is open source and available under the MIT License.
 - Built with Python and leveraging modern AI capabilities
 - Inspired by the need for intelligent code review automation
 - Powered by Groq's fast LLM inference
+
+## 🧰 Using the Makefile
+
+For local dev and deployment, you can use the included Makefile:
+
+```bash
+# Local setup (venv)
+make setup
+
+# Run locally
+make run-api
+make run-worker
+
+# Docker build and compose up
+make docker-build                    # builds API and worker images
+make docker-up                       # starts API, worker, and redis
+make docker-down                     # stops the stack
+
+# Push images (set your registry prefix)
+make docker-build VERSION=1.0.0 REGISTRY=ghcr.io/you/
+make docker-push  VERSION=1.0.0 REGISTRY=ghcr.io/you/
+
+# Utilities
+make fmt
+make lint
+make test
+```
+
+Variables you can override:
+- `REGISTRY`: Container registry prefix, e.g., `ghcr.io/you/` or `docker.io/you/`
+- `VERSION`: Image tag, e.g., `1.0.0` (defaults to `latest`)
+- `PROJECT_NAME`: Base image name (defaults to `autovate`)
+- `COMPOSE_FILE`: Compose file path (defaults to `docker-compose.yml`)
 
 ---
 

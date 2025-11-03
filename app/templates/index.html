@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Autovate Dashboard</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Autovate Dashboard</h1>
+      <div class="health">
+        <span id="api-health">API: checking...</span>
+      </div>
+    </header>
+
+    <section class="actions">
+      <h2>Run Jobs</h2>
+      <form id="form-doc" class="card">
+        <h3>Generate Docs</h3>
+        <input id="doc-repo" placeholder="/workspace or absolute repo path" />
+        <div class="row">
+          <label><input type="checkbox" id="doc-llm" /> use LLM</label>
+          <label><input type="checkbox" id="doc-manual" /> manual override (drafts)</label>
+        </div>
+        <div class="row">
+          <label>Template
+            <select id="doc-template">
+              <option value="api">API docs</option>
+              <option value="class_breakdown">Class breakdown</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Export
+            <label><input type="checkbox" class="doc-export" value="md" checked /> MD</label>
+            <label><input type="checkbox" class="doc-export" value="html" checked /> HTML</label>
+            <label><input type="checkbox" class="doc-export" value="pdf" /> PDF</label>
+          </label>
+        </div>
+        <button type="submit">Start</button>
+      </form>
+
+      <form id="form-tests" class="card">
+        <h3>Generate + Run Tests</h3>
+        <input id="tests-repo" placeholder="/workspace or absolute repo path" />
+        <button type="submit">Start</button>
+      </form>
+
+      <form id="form-heal" class="card">
+        <h3>Self Heal</h3>
+        <input id="heal-repo" placeholder="/workspace or absolute repo path" />
+        <label><input type="checkbox" id="heal-format" checked /> format only</label>
+        <button type="submit">Start</button>
+      </form>
+
+      <form id="form-stage" class="card">
+        <h3>Stage Validate</h3>
+        <input id="stage-repo" placeholder="/workspace or absolute repo path" />
+        <input id="stage-compose" placeholder="optional compose path" />
+        <input id="stage-service" placeholder="optional service name" />
+        <input id="stage-health" placeholder="optional health URL (http://...)" />
+        <input id="stage-timeout" placeholder="timeout (sec)" value="120" />
+        <button type="submit">Start</button>
+      </form>
+    </section>
+
+    <section class="jobs">
+      <h2>Recent Jobs</h2>
+      <div id="jobs-container"></div>
+    </section>
+
+    <script src="/static/app.js"></script>
+  </body>
+  </html>
+
+

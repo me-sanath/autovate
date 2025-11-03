@@ -1,0 +1,24 @@
+:root { color-scheme: light dark; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+body { margin: 0; padding: 0 16px 40px; }
+header { display: flex; align-items: center; justify-content: space-between; padding: 16px 0; }
+h1 { margin: 0; font-size: 20px; }
+.actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.card { border: 1px solid #8884; padding: 12px; border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+input { padding: 8px; border-radius: 6px; border: 1px solid #8884; }
+button { padding: 8px 10px; border-radius: 6px; border: 1px solid #8884; cursor: pointer; }
+table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+th, td { border-bottom: 1px solid #8884; padding: 8px; font-size: 14px; text-align: left; }
+.badge { padding: 2px 6px; border-radius: 6px; border: 1px solid #8884; font-size: 12px; }
+.job-accordion { border: 1px solid #8884; border-radius: 6px; margin-bottom: 8px; }
+.job-header { padding: 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+.job-header:hover { background: #8881; }
+.job-body { padding: 0 12px 12px; display: none; }
+.job-body.open { display: block; }
+.job-info { display: flex; gap: 16px; font-size: 14px; flex-wrap: wrap; }
+.job-info span { display: flex; align-items: center; gap: 4px; }
+.job-logs { margin-top: 12px; max-height: 400px; overflow-y: auto; background: #0001; border-radius: 4px; padding: 8px; font-family: monospace; font-size: 12px; }
+.log-entry { padding: 2px 0; }
+.log-entry.error { color: #d00; }
+.log-entry.warn { color: #d80; }
+.log-timestamp { color: #888; margin-right: 8px; }
+
