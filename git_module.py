@@ -2,9 +2,9 @@ from git import Repo
 import re
 import ast
 import sys
-
+from pathlib import Path
 # Open the current repo
-repo = Repo("demo-repo")
+repo = Repo(Path(__file__).parent.resolve())
 
 commit = repo.head.commit
 if not commit.parents:
