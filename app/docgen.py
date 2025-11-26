@@ -379,18 +379,59 @@ def _update_history(history_file: Path, entry: Dict) -> None:
     history_file.write_text(json.dumps(history, indent=2), encoding="utf-8")
 
 
+def _strip_code_fence(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+    if text.lower().startswith("json"):
+        text = text[4:]
+    return text.strip()
+
+
+def _parse_llm_mapping(raw: object) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    """
+    Attempt to coerce the LLM response into a {key: docstring} mapping.
+    Returns (mapping, error_message)
+    """
+    if isinstance(raw, dict):
+        clean = {str(k): str(v) for k, v in raw.items()}
+        return clean, None
+    if raw is None:
+        return None, "LLM returned empty response"
+    text = _strip_code_fence(str(raw))
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            clean = {str(k): str(v) for k, v in data.items()}
+            return clean, None
+    except json.JSONDecodeError as exc:
+        # Try to locate the first JSON object manually
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+                if isinstance(data, dict):
+                    clean = {str(k): str(v) for k, v in data.items()}
+                    return clean, None
+            except json.JSONDecodeError as nested:
+                return None, f"Failed to parse JSON: {nested}"
+        return None, f"Failed to parse JSON: {exc}"
+    return None, "LLM response is not a mapping"
+
+
 def _generate_llm_docs_for_missing(
     files_data: Dict[str, Dict],
     use_llm: bool,
-) -> Dict[str, str]:
+) -> Tuple[Dict[str, str], List[str]]:
     """
     For each file, identify functions without docstrings and send them to LLM individually.
     Returns mapping from "file_path:kind:name" to docstring.
     """
     llm_docs: Dict[str, str] = {}
+    errors: List[str] = []
     
     if not use_llm:
-        return llm_docs
+        return llm_docs, errors
     
     # Collect all functions/classes without docstrings
     missing_docs: List[Tuple[str, str, str, str, int]] = []  # (file_path, lang, kind, name, lineno)
@@ -411,7 +452,7 @@ def _generate_llm_docs_for_missing(
                 missing_docs.append((file_path, language, kind, name, lineno))
     
     if not missing_docs:
-        return llm_docs
+        return llm_docs, errors
     
     # Send to LLM in batches (group by file to provide context)
     files_to_process: Dict[str, List[Tuple[str, str, int]]] = {}
@@ -457,31 +498,20 @@ def _generate_llm_docs_for_missing(
         )
         
         if llm_res.get("status") == "ok":
-            try:
-                response_text = json.dumps(llm_res.get("response", {}))
-                # Try to extract JSON from response
-                json_match = re.search(r"\{[\s\S]*\}", response_text)
-                if json_match:
-                    parsed = json.loads(json_match.group(0))
-                    for kind, name, _lineno in missing_items:
-                        key = f"{kind}:{name}"
-                        if key in parsed:
-                            llm_docs[f"{file_path}:{kind}:{name}"] = parsed[key]
-                        elif name in parsed:
-                            llm_docs[f"{file_path}:{kind}:{name}"] = parsed[name]
-            except Exception:
-                # If JSON parsing fails, try to extract docstrings from text
-                response_text = str(llm_res.get("response", ""))
-                # Simple heuristic: look for patterns like "function_name: description"
-                for kind, name, lineno in missing_items:
-                    pattern = rf"{re.escape(name)}[:\-]?\s*(.+?)(?:\n\n|\n---|$)"
-                    match = re.search(pattern, response_text, re.IGNORECASE | re.DOTALL)
-                    if match:
-                        doc = match.group(1).strip()
-                        if doc:
-                            llm_docs[f"{file_path}:{kind}:{name}"] = str(doc)
-    
-    return llm_docs
+            parsed, parse_error = _parse_llm_mapping(llm_res.get("response"))
+            if parsed is None:
+                errors.append(f"{file_path}: {parse_error or 'Malformed LLM response'}")
+                continue
+            for kind, name, _lineno in missing_items:
+                key = f"{kind}:{name}"
+                if key in parsed:
+                    llm_docs[f"{file_path}:{kind}:{name}"] = parsed[key].strip()
+                elif name in parsed:
+                    llm_docs[f"{file_path}:{kind}:{name}"] = parsed[name].strip()
+        else:
+            errors.append(f"{file_path}: {llm_res.get('error', 'Unknown LLM failure')}")
+
+    return llm_docs, errors
 
 
 def generate_documentation(
@@ -541,7 +571,7 @@ def generate_documentation(
         }
     
     # Generate LLM docs for missing docstrings
-    llm_docs = _generate_llm_docs_for_missing(files_data, options.use_llm)
+    llm_docs, llm_errors = _generate_llm_docs_for_missing(files_data, options.use_llm)
     
     # Generate documentation for each file
     generated_outputs: Dict[str, Dict[str, str]] = {}
@@ -619,4 +649,5 @@ def generate_documentation(
         "drafts_dir": str(drafts_dir) if options.manual_override else None,
         "linked_commit": commit_sha,
         "total_files": len(touched_files),
+        "llm_errors": llm_errors,
     }

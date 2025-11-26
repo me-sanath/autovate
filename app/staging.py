@@ -7,20 +7,37 @@ import time
 from pathlib import Path
 from typing import Dict
 
+from .security import resolve_subpath, SecurityError
+
 
 def validate_with_compose(repo: Path, compose_path: str | None, service: str | None, health_url: str | None, timeout: int = 120, job_id: str | None = None) -> Dict[str, object]:
     from .log_helper import emit_log, emit_error
     repo = repo.resolve()
 
-    # Verify docker compose availability
+    # Verify docker availability and socket access
     compose_bin = shutil.which("docker")
     if not compose_bin:
         if job_id:
             emit_error(job_id, "docker not installed in worker")
         return {"status": "skipped", "reason": "docker not installed in worker"}
+    try:
+        probe = subprocess.run([compose_bin, "info"], capture_output=True, text=True, check=False, timeout=10)
+    except Exception as exc:
+        if job_id:
+            emit_error(job_id, f"docker info probe failed: {exc}")
+        return {"status": "skipped", "reason": "docker socket not accessible"}
+    if probe.returncode != 0:
+        if job_id:
+            emit_error(job_id, f"docker info failed: {probe.stderr.strip() or probe.stdout.strip()}")
+        return {"status": "skipped", "reason": "docker socket not accessible"}
 
     # Determine compose file
-    cpath = Path(compose_path) if compose_path else (repo / "docker-compose.yml")
+    try:
+        cpath = resolve_subpath(repo, compose_path) if compose_path else (repo / "docker-compose.yml")
+    except SecurityError as exc:
+        if job_id:
+            emit_error(job_id, str(exc))
+        return {"status": "skipped", "reason": str(exc)}
     if not cpath.exists():
         # fallback to Dockerfile presence check only
         if (repo / "Dockerfile").exists():

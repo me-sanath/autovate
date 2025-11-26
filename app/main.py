@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -6,6 +6,7 @@ from pydantic import BaseModel
 import os
 from celery.result import AsyncResult
 from . import job_store
+from .security import SecurityError, rate_limit_dependency, resolve_repo_path
 import asyncio
 
 # Lazy import to avoid Celery initialization on import in non-worker contexts
@@ -27,6 +28,10 @@ class TestJob(BaseModel):
 class HealJob(BaseModel):
     repo_path: str
     format_only: bool | None = True
+    use_ai: bool | None = True
+    groq_api_key: str | None = None
+    model: str | None = "llama-3.1-8b-instant"
+    auto_apply: bool | None = False
 
 
 class StageJob(BaseModel):
@@ -47,12 +52,26 @@ def health():
     return {"status": "ok"}
 
 
+def _safe_repo(path: str) -> str:
+    try:
+        return str(resolve_repo_path(path))
+    except SecurityError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+_doc_rate_limit = rate_limit_dependency("doc_jobs")
+_tests_rate_limit = rate_limit_dependency("test_jobs")
+_heal_rate_limit = rate_limit_dependency("heal_jobs")
+_stage_rate_limit = rate_limit_dependency("stage_jobs")
+
+
 @app.post("/jobs/doc")
-def job_doc(payload: DocJob):
+def job_doc(payload: DocJob, _: None = Depends(_doc_rate_limit)):
+    repo = _safe_repo(payload.repo_path)
     task = celery_app.send_task(
         "tasks.generate_docs",
         args=[
-            payload.repo_path,
+            repo,
             bool(payload.use_llm),
             payload.template,
             payload.export_formats or None,
@@ -72,8 +91,9 @@ def job_doc(payload: DocJob):
 
 
 @app.post("/jobs/tests/generate-run")
-def job_tests(payload: TestJob):
-    task = celery_app.send_task("tasks.generate_and_run_tests", args=[payload.repo_path])
+def job_tests(payload: TestJob, _: None = Depends(_tests_rate_limit)):
+    repo = _safe_repo(payload.repo_path)
+    task = celery_app.send_task("tasks.generate_and_run_tests", args=[repo])
     job_store.add_job({
         "id": task.id,
         "type": "tests",
@@ -87,9 +107,18 @@ def job_tests(payload: TestJob):
 
 
 @app.post("/jobs/self-heal")
-def job_self_heal(payload: HealJob):
+def job_self_heal(payload: HealJob, _: None = Depends(_heal_rate_limit)):
+    repo = _safe_repo(payload.repo_path)
     task = celery_app.send_task(
-        "tasks.self_heal", args=[payload.repo_path, bool(payload.format_only)]
+        "tasks.self_heal",
+        args=[
+            repo,
+            bool(payload.format_only),
+            bool(payload.use_ai),
+            payload.groq_api_key,
+            payload.model or "llama-3.1-8b-instant",
+            bool(payload.auto_apply),
+        ],
     )
     job_store.add_job({
         "id": task.id,
@@ -99,16 +128,17 @@ def job_self_heal(payload: HealJob):
         "state": "PENDING",
     })
     from .log_helper import emit_log
-    emit_log(task.id, "Self-heal job created", "INFO")
+    emit_log(task.id, f"Self-heal job created (use_ai={payload.use_ai})", "INFO")
     return {"job_id": task.id}
 
 
 @app.post("/jobs/stage/validate")
-def job_stage(payload: StageJob):
+def job_stage(payload: StageJob, _: None = Depends(_stage_rate_limit)):
+    repo = _safe_repo(payload.repo_path)
     task = celery_app.send_task(
         "tasks.stage_validate",
         args=[
-            payload.repo_path,
+            repo,
             payload.compose_path,
             payload.service,
             payload.health_url,

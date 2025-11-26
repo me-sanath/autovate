@@ -1,17 +1,14 @@
-from git import Repo
-import re
+from __future__ import annotations
+
+import argparse
 import ast
+import json
+import re
 import sys
+from pathlib import Path
+from typing import Dict, List, Optional
 
-# Open the current repo
-repo = Repo("demo-repo")
-
-commit = repo.head.commit
-if not commit.parents:
-    print("No parent commit to diff against.")
-    sys.exit(0)
-
-parent = commit.parents[0]
+from git import InvalidGitRepositoryError, Repo
 
 def parse_patch_for_changes(patch_text):
     """
@@ -45,7 +42,7 @@ def parse_patch_for_changes(patch_text):
             i += 1
     return changes
 
-def load_file_at_commit(path, commit_ref):
+def load_file_at_commit(repo: Repo, path: str, commit_ref: str):
     try:
         return repo.git.show(f'{commit_ref}:{path}')
     except Exception:
@@ -116,68 +113,61 @@ def find_enclosing_by_regex(source_text, target_lineno):
     chain.reverse()
     return " -> ".join(chain) if chain else "module"
 
-# iterate diffs
-all_rag_contexts = []  # collect all change contexts to create one aggregated prompt
+def collect_change_contexts(repo: Repo, commit, parent) -> List[Dict[str, str]]:
+    """Collect structured change contexts between commit and parent."""
+    contexts: List[Dict[str, str]] = []
 
-for diff in commit.diff(parent, create_patch=True):
-    print("="*80)
-    print(f"File: {diff.a_path} -> {diff.b_path}")
-    patch = diff.diff.decode('utf-8', errors='ignore')
-    changes = parse_patch_for_changes(patch)
-    if not changes:
-        print("No hunk-parsed changes (binary or rename).")
-        continue
-    for ch in changes:
-        # decide which file version to load
-        if ch['type'] == 'add':
-            # use new file from current commit
-            path = diff.b_path
-            ref = commit.hexsha
-        else:  # 'del'
-            path = diff.a_path
-            ref = parent.hexsha
-        if not path:
-            print(f"Skipping change with no path (type={ch['type']}).")
+    for diff in commit.diff(parent, create_patch=True):
+        patch_bytes = diff.diff
+        if not patch_bytes:
             continue
-        file_text = load_file_at_commit(path, ref)
-        if file_text is None:
-            print(f"Could not load {path}@{ref}")
+        patch = patch_bytes.decode('utf-8', errors='ignore') if isinstance(patch_bytes, (bytes, bytearray)) else patch_bytes
+        changes = parse_patch_for_changes(patch)
+        if not changes:
             continue
-        lineno = ch['lineno']
-        # get small context
-        src_lines = file_text.splitlines()
-        ctx_start = max(0, lineno - 3)
-        ctx_end = min(len(src_lines), lineno + 2)
-        context_snippet = "\n".join(src_lines[ctx_start:ctx_end])
-        # attempt python AST resolution when appropriate
-        if path.endswith('.py'):
-            chain = find_enclosing_python_chain(file_text, lineno)
-            if chain is None:
+        for ch in changes:
+            if ch['type'] == 'add':
+                path = diff.b_path
+                ref = commit.hexsha
+            else:
+                path = diff.a_path
+                ref = parent.hexsha
+            if not path:
+                continue
+            file_text = load_file_at_commit(repo, path, ref)
+            if file_text is None:
+                continue
+            lineno = ch['lineno']
+            src_lines = file_text.splitlines()
+            ctx_start = max(0, lineno - 3)
+            ctx_end = min(len(src_lines), lineno + 2)
+            context_snippet = "\n".join(src_lines[ctx_start:ctx_end])
+            if path.endswith('.py'):
+                chain = find_enclosing_python_chain(file_text, lineno)
+                if chain is None:
+                    chain = find_enclosing_by_regex(file_text, lineno)
+            else:
                 chain = find_enclosing_by_regex(file_text, lineno)
-        else:
-            chain = find_enclosing_by_regex(file_text, lineno)
 
-        rag_context = {
-            "file_path": path,
-            "ref": ref,
-            "change_type": ch['type'],
-            "lineno": lineno,
-            "changed_line": ch['content'],
-            "context": context_snippet,
-            "enclosing_chain": chain,
-            "commit": commit.hexsha,
-            "parent_commit": parent.hexsha,
-        }
+            contexts.append({
+                "file_path": path,
+                "ref": ref,
+                "change_type": ch['type'],
+                "lineno": lineno,
+                "changed_line": ch['content'],
+                "context": context_snippet,
+                "enclosing_chain": chain,
+                "commit": commit.hexsha,
+                "parent_commit": parent.hexsha,
+            })
+    return contexts
 
-        # accumulate contexts instead of printing per-change prompts
-        all_rag_contexts.append(rag_context)
 
-    print("\n")
+def build_aggregated_prompt(change_contexts, commit, parent) -> Optional[str]:
+    """Build a single aggregated RAG prompt from collected change contexts."""
+    if not change_contexts:
+        return None
 
-# After collecting all changes, create a single aggregated RAG prompt
-if not all_rag_contexts:
-    print("No changes collected to build an aggregated prompt.")
-else:
     header = (
         "You are an assistant helping to reason about code changes for retrieval.\n"
         f"Repository commit: {commit.hexsha}\n"
@@ -185,7 +175,7 @@ else:
         "Below are all detected changes. Each change is numbered and includes file/ref, change type, line number, the changed line, a few surrounding lines, and the enclosing structure.\n\n"
     )
     entries = []
-    for i, c in enumerate(all_rag_contexts, start=1):
+    for i, c in enumerate(change_contexts, start=1):
         entry = (
             f"Change {i}:\n"
             f"File: {c['file_path']} @ {c['ref']}\n"
@@ -206,8 +196,65 @@ else:
         "Keep suggestions minimal and clearly indicate any assumptions."
     )
 
-    combined_prompt = header + body + instructions
+    return header + body + instructions
 
-    # print summary and the single combined prompt
-    print(f"Collected {len(all_rag_contexts)} changes. Aggregated RAG Prompt:\n")
-    print(combined_prompt)
+
+def analyze_commit(repo_path: str, commit_ref: Optional[str] = None, parent_ref: Optional[str] = None) -> Dict[str, object]:
+    """Analyze a commit and return RAG-ready context plus aggregated prompt."""
+    repo_path_resolved = Path(repo_path).resolve()
+    try:
+        repo = Repo(str(repo_path_resolved))
+    except InvalidGitRepositoryError as err:
+        raise FileNotFoundError(f"Not a git repository: {repo_path}") from err
+
+    commit = repo.commit(commit_ref) if commit_ref else repo.head.commit
+    if parent_ref:
+        parent = repo.commit(parent_ref)
+    else:
+        if not commit.parents:
+            raise ValueError("No parent commit to diff against. Provide --parent to compare explicitly.")
+        parent = commit.parents[0]
+
+    change_contexts = collect_change_contexts(repo, commit, parent)
+    prompt = build_aggregated_prompt(change_contexts, commit, parent)
+    return {
+        "repo": str(repo_path_resolved),
+        "commit": commit.hexsha,
+        "parent": parent.hexsha,
+        "change_count": len(change_contexts),
+        "changes": change_contexts,
+        "prompt": prompt,
+    }
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Analyze git commits and build RAG prompts.")
+    parser.add_argument("repo", nargs="?", default="demo-repo", help="Path to the repository to analyze.")
+    parser.add_argument("--commit", help="Commit hash/refs to analyze (defaults to HEAD).")
+    parser.add_argument("--parent", help="Parent commit hash/refs (defaults to first parent).")
+    parser.add_argument("--json", action="store_true", help="Print JSON result instead of formatted prompt.")
+    args = parser.parse_args(argv)
+
+    try:
+        result = analyze_commit(args.repo, args.commit, args.parent)
+    except FileNotFoundError as exc:
+        print(str(exc))
+        return 1
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        prompt = result.get("prompt")
+        if not prompt:
+            print("No changes collected to build an aggregated prompt.")
+        else:
+            print(f"Collected {result['change_count']} changes. Aggregated RAG Prompt:\n")
+            print(prompt)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -47,6 +47,17 @@ Refer to the flow diagram above for a visual representation of the system archit
 - Git (for git module functionality)
 - Optional: Groq API key (for LLM-powered analysis)
 
+### Security & Trust Configuration
+
+Autovate now enforces explicit trust boundaries around job inputs:
+
+- `AUTOVATE_API_KEYS`: Comma-separated API keys that clients must send via `X-API-Key`.
+- `AUTOVATE_ALLOWED_REPOS`: Comma-separated absolute paths that jobs may access. Defaults to `AUTOVATE_WORKSPACE_ROOT`.
+- `AUTOVATE_WORKSPACE_ROOT`: Base path used to resolve relative repo paths.
+- `AUTOVATE_HEAL_MAX_BYTES`: Maximum total byte delta self-heal may apply before halting (default `200000`).
+
+Workers refuse to queue jobs when the supplied repository path falls outside the allow-list, and job submissions are rate-limited per API key.
+
 ### Run the local MVP (API + Worker + Redis)
 
 ```bash
@@ -65,24 +76,28 @@ Example calls:
 # Health
 curl http://localhost:8000/health
 
-# Generate docs
+# Generate docs (requires API key)
 curl -X POST http://localhost:8000/jobs/doc \
   -H 'Content-Type: application/json' \
+  -H 'X-API-Key: $AUTOVATE_API_KEY' \
   -d '{"repo_path":"/workspace"}'
 
 # Generate and run tests
 curl -X POST http://localhost:8000/jobs/tests/generate-run \
   -H 'Content-Type: application/json' \
+  -H 'X-API-Key: $AUTOVATE_API_KEY' \
   -d '{"repo_path":"/workspace"}'
 
 # Self heal (format-only)
 curl -X POST http://localhost:8000/jobs/self-heal \
   -H 'Content-Type: application/json' \
+  -H 'X-API-Key: $AUTOVATE_API_KEY' \
   -d '{"repo_path":"/workspace","format_only":true}'
 
 # Staging validation (compose)
 curl -X POST http://localhost:8000/jobs/stage/validate \
   -H 'Content-Type: application/json' \
+  -H 'X-API-Key: $AUTOVATE_API_KEY' \
   -d '{"repo_path":"/workspace"}'
 
 # Poll job status
@@ -129,10 +144,14 @@ python langraph.py /path/to/your/project --llm
 #### Analyze Git Commits
 
 ```bash
-python git_module.py
+# Defaults to HEAD vs HEAD^ inside ./demo-repo
+python git_module.py demo-repo
+
+# Compare explicit commits and emit JSON
+python git_module.py /path/to/repo --commit abc123 --parent def456 --json
 ```
 
-This will analyze the most recent commit in the `demo-repo` directory and generate a comprehensive RAG prompt.
+If you omit `--commit` the tool analyzes `HEAD`, and it falls back to the first parent unless `--parent` is provided. Use `--json` to capture the structured payload (commit metadata, per-change contexts, aggregated prompt) for downstream automation.
 
 ## 📖 Usage Examples
 
